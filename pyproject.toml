@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "camera-based-anomaly-monitor"
+version = "0.1.0"
+description = "OpenCV proof of concept for camera-based anomaly detection."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "opencv-contrib-python>=4.9.0",
+  "numpy>=1.26.0",
+  "mediapipe>=0.10.35",
+]
+
+[project.scripts]
+anomaly-monitor = "anomaly_monitor.main:main"
+anomaly-menu = "anomaly_monitor.menu:main"
+enroll-face = "anomaly_monitor.enroll:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
