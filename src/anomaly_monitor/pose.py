@@ -9,7 +9,7 @@ import cv2
 import mediapipe as mp
 import numpy as np
 
-from anomaly_monitor.config import Roi
+from anomaly_monitor.config import Roi, clip_roi_to_frame
 
 
 POSE_MODEL_URL = (
@@ -255,7 +255,11 @@ class PoseBehaviorAnalyzer:
             return False
 
         frame_height, frame_width = frame_shape[:2]
-        roi_x, roi_y, roi_width, roi_height = self.roi
+        clipped_roi = clip_roi_to_frame(self.roi, frame_shape)
+        if clipped_roi is None:
+            return False
+
+        roi_x, roi_y, roi_width, roi_height = clipped_roi
         wrist_indexes = (
             mp.tasks.vision.PoseLandmark.LEFT_WRIST.value,
             mp.tasks.vision.PoseLandmark.RIGHT_WRIST.value,
@@ -268,7 +272,7 @@ class PoseBehaviorAnalyzer:
             x, y = landmarks[index]
             pixel_x = int(x * frame_width)
             pixel_y = int(y * frame_height)
-            if roi_x <= pixel_x <= roi_x + roi_width and roi_y <= pixel_y <= roi_y + roi_height:
+            if roi_x <= pixel_x < roi_x + roi_width and roi_y <= pixel_y < roi_y + roi_height:
                 return True
 
         return False

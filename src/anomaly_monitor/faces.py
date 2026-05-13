@@ -38,6 +38,9 @@ class FaceRecognizer:
         self.face_cascade = cv2.CascadeClassifier(
             cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
         )
+        if self.face_cascade.empty():
+            raise RuntimeError("Could not load OpenCV Haar cascade for face detection.")
+
         self._train()
 
     @property

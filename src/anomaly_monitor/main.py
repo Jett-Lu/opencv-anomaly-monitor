@@ -73,6 +73,36 @@ def parse_args() -> argparse.Namespace:
         help="Normalized wrist speed needed to flag rapid hand movement.",
     )
     parser.add_argument(
+        "--loitering-seconds",
+        type=float,
+        default=12.0,
+        help="Seconds a tracked person can stay in place before loitering is flagged.",
+    )
+    parser.add_argument(
+        "--roi-dwell-seconds",
+        type=float,
+        default=3.0,
+        help="Seconds a tracked person can remain inside the ROI before dwell is flagged.",
+    )
+    parser.add_argument(
+        "--motion-history-seconds",
+        type=float,
+        default=20.0,
+        help="Seconds of per-person movement history to retain.",
+    )
+    parser.add_argument(
+        "--rapid-body-speed-threshold",
+        type=float,
+        default=0.65,
+        help="Normalized full-body speed needed to flag rapid body movement.",
+    )
+    parser.add_argument(
+        "--repeated-motion-distance",
+        type=float,
+        default=0.35,
+        help="Recent normalized path length needed to flag repeated motion.",
+    )
+    parser.add_argument(
         "--max-poses",
         type=int,
         default=4,
@@ -147,6 +177,11 @@ def parse_args() -> argparse.Namespace:
         help="Disable human skeleton and behavior analysis.",
     )
     parser.add_argument(
+        "--no-tracking",
+        action="store_true",
+        help="Disable person tracking and motion history analysis.",
+    )
+    parser.add_argument(
         "--no-face-recognition",
         action="store_true",
         help="Disable known-face recognition.",
@@ -204,72 +239,76 @@ def run_monitor(config: MonitorConfig) -> None:
     if not capture.isOpened():
         raise RuntimeError(f"Could not open video source: {config.source}")
 
-    detector = MotionAnomalyDetector(config)
-    logger = EventLogger(config.output_dir)
-    last_alert_time = 0.0
-    frame_number = 0
-    video_buffer_size = max(1, int(config.event_video_seconds * config.event_video_fps))
-    recent_frames = deque(maxlen=video_buffer_size)
+    detector: MotionAnomalyDetector | None = None
+    try:
+        detector = MotionAnomalyDetector(config)
+        logger = EventLogger(config.output_dir)
+        last_alert_time = 0.0
+        frame_number = 0
+        video_buffer_size = max(1, int(config.event_video_seconds * config.event_video_fps))
+        recent_frames = deque(maxlen=video_buffer_size)
 
-    print("Camera anomaly monitor is running.")
-    print("Press q to quit.")
+        print("Camera anomaly monitor is running.")
+        print("Press q to quit.")
 
-    while True:
-        ok, frame = capture.read()
-        if not ok:
-            break
+        while True:
+            ok, frame = capture.read()
+            if not ok:
+                break
 
-        frame_number += 1
-        result = detector.analyze(frame)
-        recent_frames.append(result.frame.copy())
-        now = time.monotonic()
+            frame_number += 1
+            result = detector.analyze(frame)
+            recent_frames.append(result.frame.copy())
+            now = time.monotonic()
 
-        warmed_up = frame_number > config.warmup_frames
-        if (
-            warmed_up
-            and result.is_anomaly
-            and now - last_alert_time >= config.cooldown_seconds
-        ):
-            snapshot_path = save_alert_snapshot(config.output_dir, frame_number, result.frame)
-            video_path = save_event_video(
-                config.output_dir,
-                frame_number,
-                recent_frames,
-                config.event_video_fps,
-            )
-            event = AlertEvent.create(
-                frame_number=frame_number,
-                score=result.score,
-                motion_score=result.motion_score,
-                pose_score=result.pose_score,
-                moving_area=result.moving_area,
-                region_count=len(result.regions),
-                labels=result.labels,
-                person_detected=result.person_detected,
-                identity=result.identity,
-                identities=[identity.name for identity in result.identities],
-                people=result.people,
-                snapshot_path=snapshot_path,
-                video_path=video_path,
-            )
-            logger.write(event)
-            last_alert_time = now
-            print(
-                f"Alert saved | frame={event.frame_number} "
-                f"person={event.identity} score={event.score} labels={event.labels} "
-                f"snapshot={event.snapshot_path} video={event.video_path}"
-            )
+            warmed_up = frame_number > config.warmup_frames
+            if (
+                warmed_up
+                and result.is_anomaly
+                and now - last_alert_time >= config.cooldown_seconds
+            ):
+                snapshot_path = save_alert_snapshot(config.output_dir, frame_number, result.frame)
+                video_path = save_event_video(
+                    config.output_dir,
+                    frame_number,
+                    recent_frames,
+                    config.event_video_fps,
+                )
+                event = AlertEvent.create(
+                    frame_number=frame_number,
+                    score=result.score,
+                    motion_score=result.motion_score,
+                    pose_score=result.pose_score,
+                    tracking_score=result.tracking_score,
+                    moving_area=result.moving_area,
+                    region_count=len(result.regions),
+                    labels=result.labels,
+                    person_detected=result.person_detected,
+                    identity=result.identity,
+                    identities=[identity.name for identity in result.identities],
+                    people=result.people,
+                    snapshot_path=snapshot_path,
+                    video_path=video_path,
+                )
+                logger.write(event)
+                last_alert_time = now
+                print(
+                    f"Alert saved | frame={event.frame_number} "
+                    f"person={event.identity} score={event.score} labels={event.labels} "
+                    f"snapshot={event.snapshot_path} video={event.video_path}"
+                )
 
-        cv2.imshow("Camera Anomaly Monitor", result.frame)
-        if config.show_mask:
-            cv2.imshow("Motion Mask", result.mask)
+            cv2.imshow("Camera Anomaly Monitor", result.frame)
+            if config.show_mask:
+                cv2.imshow("Motion Mask", result.mask)
 
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            break
-
-    capture.release()
-    detector.close()
-    cv2.destroyAllWindows()
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
+    finally:
+        capture.release()
+        if detector is not None:
+            detector.close()
+        cv2.destroyAllWindows()
 
 
 def main() -> None:
@@ -282,6 +321,11 @@ def main() -> None:
         threshold=args.threshold,
         pose_threshold=args.pose_threshold,
         wrist_speed_threshold=args.wrist_speed_threshold,
+        loitering_seconds=args.loitering_seconds,
+        roi_dwell_seconds=args.roi_dwell_seconds,
+        motion_history_seconds=args.motion_history_seconds,
+        rapid_body_speed_threshold=args.rapid_body_speed_threshold,
+        repeated_motion_distance=args.repeated_motion_distance,
         max_poses=args.max_poses,
         pose_model_path=args.pose_model,
         cooldown_seconds=args.cooldown,
@@ -292,6 +336,7 @@ def main() -> None:
         min_area=args.min_area,
         roi=args.roi,
         enable_pose=not args.no_pose,
+        enable_tracking=not args.no_tracking,
         enable_face_recognition=not args.no_face_recognition,
         enable_motion_alerts=args.motion_alerts,
         show_motion_boxes=args.show_motion_boxes,

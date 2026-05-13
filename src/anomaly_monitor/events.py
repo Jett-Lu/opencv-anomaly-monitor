@@ -14,6 +14,7 @@ class AlertEvent:
     score: float
     motion_score: float
     pose_score: float
+    tracking_score: float
     moving_area: int
     region_count: int
     labels: list[str]
@@ -31,6 +32,7 @@ class AlertEvent:
         score: float,
         motion_score: float,
         pose_score: float,
+        tracking_score: float,
         moving_area: int,
         region_count: int,
         labels: list[str],
@@ -47,6 +49,7 @@ class AlertEvent:
             score=round(score, 5),
             motion_score=round(motion_score, 5),
             pose_score=round(pose_score, 5),
+            tracking_score=round(tracking_score, 5),
             moving_area=moving_area,
             region_count=region_count,
             labels=labels,

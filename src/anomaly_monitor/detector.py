@@ -7,9 +7,10 @@ from typing import Iterable
 import cv2
 import numpy as np
 
-from anomaly_monitor.config import MonitorConfig
+from anomaly_monitor.config import MonitorConfig, clip_roi_to_frame, roi_area
 from anomaly_monitor.faces import FaceIdentity, FaceRecognizer
 from anomaly_monitor.pose import PoseBehaviorAnalyzer, PosePersonBehavior
+from anomaly_monitor.tracking import PersonMotionTracker, TrackBehavior, TrackObservation
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,7 @@ class DetectionResult:
     score: float
     motion_score: float
     pose_score: float
+    tracking_score: float
     moving_area: int
     regions: list[MotionRegion]
     labels: list[str]
@@ -63,6 +65,21 @@ class MotionAnomalyDetector:
                 max_poses=config.max_poses,
             )
             if config.enable_pose
+            else None
+        )
+        self.motion_tracker = (
+            PersonMotionTracker(
+                match_distance=config.track_match_distance,
+                lost_seconds=config.track_lost_seconds,
+                history_seconds=config.motion_history_seconds,
+                loitering_seconds=config.loitering_seconds,
+                loitering_radius=config.loitering_radius,
+                roi_dwell_seconds=config.roi_dwell_seconds,
+                repeated_motion_distance=config.repeated_motion_distance,
+                repeated_motion_radius=config.repeated_motion_radius,
+                rapid_body_speed_threshold=config.rapid_body_speed_threshold,
+            )
+            if config.enable_pose and config.enable_tracking
             else None
         )
         self.face_recognizer = (
@@ -108,7 +125,14 @@ class MotionAnomalyDetector:
         motion_score = moving_area / total_area if total_area else 0.0
         alert_motion_score = motion_score if self.config.enable_motion_alerts else 0.0
         matched_names = self._match_identities_to_people(pose_people, identities)
-        active_labels = self._update_person_alerts(pose_people)
+        tracking_behaviors = self._analyze_motion_history(pose_people, frame.shape)
+        tracking_score = max(
+            (behavior.score for behavior in tracking_behaviors.values()),
+            default=0.0,
+        )
+        tracking_labels = self._tracking_labels(tracking_behaviors)
+        active_labels = self._update_person_alerts(pose_people, tracking_behaviors)
+        display_labels = self._merge_labels(labels + tracking_labels, active_labels)
         active_pose_score = max(
             (
                 alert.score
@@ -117,20 +141,33 @@ class MotionAnomalyDetector:
             ),
             default=0.0,
         )
-        score = max(alert_motion_score, pose_score, active_pose_score)
-        person_summaries = self._person_summaries(pose_people, matched_names, active_labels)
-        identity = self._primary_identity(pose_people, identities, matched_names, active_labels)
+        score = max(alert_motion_score, pose_score, tracking_score, active_pose_score)
+        person_summaries = self._person_summaries(
+            pose_people,
+            matched_names,
+            active_labels,
+            tracking_behaviors,
+        )
+        identity = self._primary_identity(
+            pose_people,
+            identities,
+            matched_names,
+            active_labels,
+            tracking_behaviors,
+        )
         display_frame = self._draw_regions(
             pose_frame.copy(),
             regions,
             motion_score,
             pose_score,
-            labels,
+            tracking_score,
+            display_labels,
             person_detected,
             identity,
             pose_people,
             matched_names,
             active_labels,
+            tracking_behaviors,
         )
 
         return DetectionResult(
@@ -139,9 +176,10 @@ class MotionAnomalyDetector:
             score=score,
             motion_score=motion_score,
             pose_score=pose_score,
+            tracking_score=tracking_score,
             moving_area=moving_area,
             regions=regions,
-            labels=labels,
+            labels=display_labels,
             person_detected=person_detected,
             identity=identity,
             identities=identities,
@@ -149,6 +187,7 @@ class MotionAnomalyDetector:
             is_anomaly=(
                 (self.config.enable_motion_alerts and motion_score >= self.config.threshold)
                 or pose_score >= self.config.pose_threshold
+                or tracking_score >= self.config.pose_threshold
                 or active_pose_score >= self.config.pose_threshold
             ),
         )
@@ -174,7 +213,11 @@ class MotionAnomalyDetector:
         if self.config.roi is None:
             return mask
 
-        x, y, width, height = self.config.roi
+        clipped_roi = clip_roi_to_frame(self.config.roi, mask.shape)
+        if clipped_roi is None:
+            return np.zeros_like(mask)
+
+        x, y, width, height = clipped_roi
         roi_mask = np.zeros_like(mask)
         roi_mask[y : y + height, x : x + width] = 255
         return cv2.bitwise_and(mask, roi_mask)
@@ -183,8 +226,7 @@ class MotionAnomalyDetector:
         if self.config.roi is None:
             return frame.shape[0] * frame.shape[1]
 
-        _, _, width, height = self.config.roi
-        return width * height
+        return roi_area(self.config.roi, frame.shape)
 
     def _find_regions(self, mask: np.ndarray) -> Iterable[MotionRegion]:
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -201,6 +243,42 @@ class MotionAnomalyDetector:
                 height=height,
                 area=area,
             )
+
+    def _analyze_motion_history(
+        self,
+        people: list[PosePersonBehavior],
+        frame_shape: tuple[int, ...],
+    ) -> dict[int, TrackBehavior]:
+        if self.motion_tracker is None or not people:
+            return {}
+
+        observations = [
+            TrackObservation(
+                index=person.index,
+                center=person.center,
+                inside_roi=self._center_inside_roi(person.center, frame_shape),
+            )
+            for person in people
+        ]
+        return self.motion_tracker.update(observations, time.monotonic())
+
+    def _center_inside_roi(
+        self,
+        center: tuple[float, float],
+        frame_shape: tuple[int, ...],
+    ) -> bool:
+        if self.config.roi is None:
+            return False
+
+        clipped_roi = clip_roi_to_frame(self.config.roi, frame_shape)
+        if clipped_roi is None:
+            return False
+
+        frame_height, frame_width = frame_shape[:2]
+        x, y, width, height = clipped_roi
+        center_x = int(center[0] * frame_width)
+        center_y = int(center[1] * frame_height)
+        return x <= center_x < x + width and y <= center_y < y + height
 
     def _match_identities_to_people(
         self,
@@ -232,16 +310,24 @@ class MotionAnomalyDetector:
         people: list[PosePersonBehavior],
         matched_names: dict[int, str],
         active_labels: dict[int, list[str]],
+        tracking_behaviors: dict[int, TrackBehavior],
     ) -> list[str]:
         summaries: list[str] = []
         for person in people:
             name = matched_names.get(person.index, f"Person {person.index + 1}")
-            labels_for_person = active_labels.get(person.index, person.labels)
+            tracking = tracking_behaviors.get(person.index)
+            tracking_labels = tracking.labels if tracking is not None else []
+            labels_for_person = active_labels.get(
+                person.index,
+                self._dedupe(person.labels + tracking_labels),
+            )
+            score = max(person.score, tracking.score if tracking is not None else 0.0)
+            track_text = f" track={tracking.track_id}" if tracking is not None else ""
             if labels_for_person:
                 labels = ", ".join(labels_for_person)
-                summaries.append(f"{name}: {labels} score={person.score:.2f}")
+                summaries.append(f"{name}{track_text}: {labels} score={score:.2f}")
             else:
-                summaries.append(f"{name}: normal score={person.score:.2f}")
+                summaries.append(f"{name}{track_text}: normal score={score:.2f}")
         return summaries
 
     def _primary_identity(
@@ -250,6 +336,7 @@ class MotionAnomalyDetector:
         identities: list[FaceIdentity],
         matched_names: dict[int, str],
         active_labels: dict[int, list[str]],
+        tracking_behaviors: dict[int, TrackBehavior],
     ) -> str:
         anomalous_people = [
             person
@@ -260,7 +347,7 @@ class MotionAnomalyDetector:
             person = max(
                 anomalous_people,
                 key=lambda item: self.person_alerts.get(
-                    item.index,
+                    self._alert_key(item, tracking_behaviors.get(item.index)),
                     ActivePersonAlert(labels=item.labels, score=item.score, expires_at=0.0),
                 ).score,
             )
@@ -287,6 +374,7 @@ class MotionAnomalyDetector:
     def _update_person_alerts(
         self,
         people: list[PosePersonBehavior],
+        tracking_behaviors: dict[int, TrackBehavior],
     ) -> dict[int, list[str]]:
         now = time.monotonic()
         self.person_alerts = {
@@ -296,18 +384,64 @@ class MotionAnomalyDetector:
         }
 
         for person in people:
-            if person.score >= self.config.pose_threshold and person.labels:
-                self.person_alerts[person.index] = ActivePersonAlert(
-                    labels=person.labels,
-                    score=person.score,
+            tracking = tracking_behaviors.get(person.index)
+            labels = self._dedupe(
+                person.labels + (tracking.labels if tracking is not None else [])
+            )
+            score = max(person.score, tracking.score if tracking is not None else 0.0)
+            if score >= self.config.pose_threshold and labels:
+                self.person_alerts[self._alert_key(person, tracking)] = ActivePersonAlert(
+                    labels=labels,
+                    score=score,
                     expires_at=now + self.config.alert_hold_seconds,
                 )
 
-        return {
-            index: alert.labels
-            for index, alert in self.person_alerts.items()
-            if alert.expires_at > now
-        }
+        active_labels: dict[int, list[str]] = {}
+        for person in people:
+            tracking = tracking_behaviors.get(person.index)
+            alert = self.person_alerts.get(self._alert_key(person, tracking))
+            if alert is not None and alert.expires_at > now:
+                active_labels[person.index] = alert.labels
+
+        return active_labels
+
+    def _alert_key(
+        self,
+        person: PosePersonBehavior,
+        tracking: TrackBehavior | None,
+    ) -> int:
+        if tracking is not None:
+            return tracking.track_id
+        return person.index
+
+    def _merge_labels(
+        self,
+        labels: list[str],
+        active_labels: dict[int, list[str]],
+    ) -> list[str]:
+        merged = self._dedupe(labels)
+        for person_labels in active_labels.values():
+            for label in person_labels:
+                if label not in merged:
+                    merged.append(label)
+
+        return merged
+
+    def _tracking_labels(
+        self,
+        tracking_behaviors: dict[int, TrackBehavior],
+    ) -> list[str]:
+        labels: list[str] = []
+        for behavior in tracking_behaviors.values():
+            labels.extend(behavior.labels)
+        return self._dedupe(labels)
+
+    def _dedupe(self, labels: list[str]) -> list[str]:
+        merged: list[str] = []
+        for label in labels:
+            if label not in merged:
+                merged.append(label)
+        return merged
 
     def _point_distance(
         self,
@@ -322,26 +456,30 @@ class MotionAnomalyDetector:
         regions: list[MotionRegion],
         motion_score: float,
         pose_score: float,
+        tracking_score: float,
         labels: list[str],
         person_detected: bool,
         identity: str,
         pose_people: list[PosePersonBehavior],
         matched_names: dict[int, str],
         active_labels: dict[int, list[str]],
+        tracking_behaviors: dict[int, TrackBehavior],
     ) -> np.ndarray:
         if self.config.roi is not None:
-            x, y, width, height = self.config.roi
-            cv2.rectangle(frame, (x, y), (x + width, y + height), (255, 180, 0), 2)
-            cv2.putText(
-                frame,
-                "ROI",
-                (x, max(24, y - 8)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (255, 180, 0),
-                2,
-                cv2.LINE_AA,
-            )
+            clipped_roi = clip_roi_to_frame(self.config.roi, frame.shape)
+            if clipped_roi is not None:
+                x, y, width, height = clipped_roi
+                cv2.rectangle(frame, (x, y), (x + width, y + height), (255, 180, 0), 2)
+                cv2.putText(
+                    frame,
+                    "ROI",
+                    (x, max(24, y - 8)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (255, 180, 0),
+                    2,
+                    cv2.LINE_AA,
+                )
 
         if self.config.show_motion_boxes:
             for region in regions:
@@ -355,15 +493,20 @@ class MotionAnomalyDetector:
 
         is_anomaly = (
             self.config.enable_motion_alerts and motion_score >= self.config.threshold
-        ) or pose_score >= self.config.pose_threshold or bool(active_labels)
+        ) or (
+            max(pose_score, tracking_score) >= self.config.pose_threshold
+        ) or bool(active_labels)
         status = "ANOMALY" if is_anomaly else "normal"
         color = (0, 0, 255) if is_anomaly else (80, 220, 80)
         cv2.putText(
             frame,
-            f"Status: {status} | Motion: {motion_score:.3f} | Pose: {pose_score:.3f}",
+            (
+                f"Status: {status} | Motion: {motion_score:.3f} "
+                f"| Pose: {pose_score:.3f} | Track: {tracking_score:.3f}"
+            ),
             (16, 32),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.72,
+            0.62,
             color,
             2,
             cv2.LINE_AA,
@@ -391,7 +534,13 @@ class MotionAnomalyDetector:
                 cv2.LINE_AA,
             )
 
-        self._draw_person_labels(frame, pose_people, matched_names, active_labels)
+        self._draw_person_labels(
+            frame,
+            pose_people,
+            matched_names,
+            active_labels,
+            tracking_behaviors,
+        )
         return frame
 
     def _draw_person_labels(
@@ -400,14 +549,21 @@ class MotionAnomalyDetector:
         people: list[PosePersonBehavior],
         matched_names: dict[int, str],
         active_labels: dict[int, list[str]],
+        tracking_behaviors: dict[int, TrackBehavior],
     ) -> None:
         for person in people:
             name = matched_names.get(person.index, f"Person {person.index + 1}")
-            labels_for_person = active_labels.get(person.index, person.labels)
+            tracking = tracking_behaviors.get(person.index)
+            tracking_labels = tracking.labels if tracking is not None else []
+            labels_for_person = active_labels.get(
+                person.index,
+                self._dedupe(person.labels + tracking_labels),
+            )
+            track_name = f"T{tracking.track_id} {name}" if tracking is not None else name
             if labels_for_person:
-                label = f"ALERT {name}: {', '.join(labels_for_person[:2])}"
+                label = f"ALERT {track_name}: {', '.join(labels_for_person[:2])}"
             else:
-                label = name
+                label = track_name
 
             color = (0, 0, 255) if labels_for_person else (230, 230, 230)
             cv2.putText(

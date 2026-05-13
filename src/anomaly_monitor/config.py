@@ -7,6 +7,31 @@ DEFAULT_POSE_MODEL_PATH = Path("data/models/pose_landmarker_lite.task")
 DEFAULT_KNOWN_FACES_DIR = Path("data/known_faces")
 
 
+def clip_roi_to_frame(roi: Roi, frame_shape: tuple[int, ...]) -> Roi | None:
+    frame_height, frame_width = frame_shape[:2]
+    x, y, width, height = roi
+    left = min(max(x, 0), frame_width)
+    top = min(max(y, 0), frame_height)
+    right = min(max(x + width, 0), frame_width)
+    bottom = min(max(y + height, 0), frame_height)
+
+    clipped_width = right - left
+    clipped_height = bottom - top
+    if clipped_width <= 0 or clipped_height <= 0:
+        return None
+
+    return left, top, clipped_width, clipped_height
+
+
+def roi_area(roi: Roi, frame_shape: tuple[int, ...]) -> int:
+    clipped = clip_roi_to_frame(roi, frame_shape)
+    if clipped is None:
+        return 0
+
+    _, _, width, height = clipped
+    return width * height
+
+
 @dataclass(frozen=True)
 class MonitorConfig:
     source: str
@@ -29,6 +54,16 @@ class MonitorConfig:
     history: int = 500
     var_threshold: float = 32.0
     learning_rate: float = -1.0
+    enable_tracking: bool = True
+    track_match_distance: float = 0.16
+    track_lost_seconds: float = 2.0
+    motion_history_seconds: float = 20.0
+    loitering_seconds: float = 12.0
+    loitering_radius: float = 0.08
+    roi_dwell_seconds: float = 3.0
+    repeated_motion_distance: float = 0.35
+    repeated_motion_radius: float = 0.12
+    rapid_body_speed_threshold: float = 0.65
     enable_pose: bool = True
     enable_face_recognition: bool = True
     enable_motion_alerts: bool = False
@@ -60,6 +95,30 @@ class MonitorConfig:
             raise ValueError("min_area must be greater than zero")
         if self.blur_size < 1 or self.blur_size % 2 == 0:
             raise ValueError("blur_size must be a positive odd number")
+        if self.history < 1:
+            raise ValueError("history must be at least 1")
+        if self.var_threshold <= 0:
+            raise ValueError("var_threshold must be greater than zero")
+        if self.learning_rate != -1 and not 0 <= self.learning_rate <= 1:
+            raise ValueError("learning_rate must be -1 or between 0 and 1")
+        if self.track_match_distance <= 0:
+            raise ValueError("track_match_distance must be greater than zero")
+        if self.track_lost_seconds <= 0:
+            raise ValueError("track_lost_seconds must be greater than zero")
+        if self.motion_history_seconds <= 0:
+            raise ValueError("motion_history_seconds must be greater than zero")
+        if self.loitering_seconds <= 0:
+            raise ValueError("loitering_seconds must be greater than zero")
+        if self.loitering_radius <= 0:
+            raise ValueError("loitering_radius must be greater than zero")
+        if self.roi_dwell_seconds <= 0:
+            raise ValueError("roi_dwell_seconds must be greater than zero")
+        if self.repeated_motion_distance <= 0:
+            raise ValueError("repeated_motion_distance must be greater than zero")
+        if self.repeated_motion_radius <= 0:
+            raise ValueError("repeated_motion_radius must be greater than zero")
+        if self.rapid_body_speed_threshold <= 0:
+            raise ValueError("rapid_body_speed_threshold must be greater than zero")
         if self.roi is not None:
             _, _, width, height = self.roi
             if width < 1 or height < 1:

@@ -11,6 +11,7 @@ from anomaly_monitor.config import (
 )
 from anomaly_monitor.enroll import run_enrollment
 from anomaly_monitor.main import parse_roi, run_monitor
+from anomaly_monitor.names import normalize_person_name
 
 
 DEFAULT_OUTPUT_DIR = Path("data/alerts")
@@ -83,6 +84,10 @@ def begin_monitoring_custom() -> None:
     source = prompt_text("Camera/video source", "0")
     pose_threshold = prompt_float("Pose alert threshold", 0.5)
     wrist_speed_threshold = prompt_float("Wrist speed threshold", 1.0)
+    loitering_seconds = prompt_float("Loitering seconds", 12.0)
+    roi_dwell_seconds = prompt_float("Restricted-zone dwell seconds", 3.0)
+    motion_history_seconds = prompt_float("Motion history seconds", 20.0)
+    rapid_body_speed_threshold = prompt_float("Rapid body speed threshold", 0.65)
     max_poses = prompt_int("Maximum people/skeletons", 4)
     alert_hold_seconds = prompt_float("Keep alert label visible for seconds", 8.0)
     event_video_seconds = prompt_float("Event clip seconds", 6.0)
@@ -92,6 +97,7 @@ def begin_monitoring_custom() -> None:
     roi = parse_roi(roi_text) if roi_text else None
     show_motion_boxes = prompt_yes_no("Show motion boxes", False)
     motion_alerts = prompt_yes_no("Enable motion-only alerts", False)
+    tracking = prompt_yes_no("Enable person tracking and motion history", True)
     face_recognition = prompt_yes_no("Enable face recognition", True)
 
     config = MonitorConfig(
@@ -101,6 +107,10 @@ def begin_monitoring_custom() -> None:
         face_confidence_threshold=face_confidence_threshold,
         pose_threshold=pose_threshold,
         wrist_speed_threshold=wrist_speed_threshold,
+        loitering_seconds=loitering_seconds,
+        roi_dwell_seconds=roi_dwell_seconds,
+        motion_history_seconds=motion_history_seconds,
+        rapid_body_speed_threshold=rapid_body_speed_threshold,
         max_poses=max_poses,
         pose_model_path=DEFAULT_POSE_MODEL_PATH,
         alert_hold_seconds=alert_hold_seconds,
@@ -109,6 +119,7 @@ def begin_monitoring_custom() -> None:
         roi=roi,
         show_motion_boxes=show_motion_boxes,
         enable_motion_alerts=motion_alerts,
+        enable_tracking=tracking,
         enable_face_recognition=face_recognition,
     )
 
@@ -118,8 +129,10 @@ def begin_monitoring_custom() -> None:
 
 def enroll_face() -> None:
     name = prompt_text("Name to remember, for example Person A")
-    if not name:
-        print("No name entered.")
+    try:
+        name = normalize_person_name(name)
+    except ValueError as exc:
+        print(f"Invalid name: {exc}")
         return
 
     source = prompt_text("Camera/video source", "0")
@@ -174,8 +187,13 @@ def rename_face_label() -> None:
     if person_dir is None:
         return
 
-    new_name = prompt_text("New name", person_dir.name)
-    if not new_name or new_name == person_dir.name:
+    try:
+        new_name = normalize_person_name(prompt_text("New name", person_dir.name))
+    except ValueError as exc:
+        print(f"Invalid name: {exc}")
+        return
+
+    if new_name == person_dir.name:
         print("Name unchanged.")
         return
 
@@ -269,7 +287,7 @@ def show_recent_alerts(limit: int = 10) -> None:
         labels = ", ".join(event.get("labels", [])) or "none"
         print(
             f"- {event.get('timestamp')} | {event.get('identity')} | "
-            f"score={event.get('score')} | labels={labels}"
+            f"score={event.get('score')} track={event.get('tracking_score', 0)} | labels={labels}"
         )
         print(f"  snapshot: {event.get('snapshot_path')}")
         if event.get("video_path"):

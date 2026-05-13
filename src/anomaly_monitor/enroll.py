@@ -6,6 +6,7 @@ from pathlib import Path
 import cv2
 
 from anomaly_monitor.main import normalize_source
+from anomaly_monitor.names import normalize_person_name
 
 
 def parse_args() -> argparse.Namespace:
@@ -44,8 +45,12 @@ def largest_face(faces) -> tuple[int, int, int, int] | None:
 
 
 def next_sample_path(person_dir: Path) -> Path:
-    existing = sorted(person_dir.glob("sample_*.jpg"))
-    return person_dir / f"sample_{len(existing) + 1:03d}.jpg"
+    sample_number = 1
+    while True:
+        path = person_dir / f"sample_{sample_number:03d}.jpg"
+        if not path.exists():
+            return path
+        sample_number += 1
 
 
 def run_enrollment(
@@ -57,6 +62,7 @@ def run_enrollment(
     if count < 1:
         raise ValueError("count must be at least 1")
 
+    name = normalize_person_name(name)
     person_dir = known_faces_dir / name
     person_dir.mkdir(parents=True, exist_ok=True)
 
