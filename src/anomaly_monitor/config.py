@@ -50,7 +50,7 @@ class MonitorConfig:
     face_confidence_threshold: float = 75.0
     unknown_face_match_threshold: float = 42.0
     arcface_model_path: Path = DEFAULT_ARCFACE_MODEL_PATH
-    arcface_similarity_threshold: float = 0.45
+    arcface_similarity_threshold: float = 0.34
     arcface_similarity_margin: float = 0.03
     identity_alert_hold_seconds: float = 300.0
     cooldown_seconds: float = 5.0

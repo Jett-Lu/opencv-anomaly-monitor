@@ -102,7 +102,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--arcface-similarity-threshold",
         type=float,
-        default=0.45,
+        default=0.34,
         help="ArcFace cosine similarity needed to label a known person. Higher is stricter.",
     )
     parser.add_argument(

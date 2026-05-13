@@ -108,7 +108,7 @@ def begin_monitoring_custom() -> None:
     face_engine = prompt_face_engine("arcface")
     face_confidence_threshold = prompt_float("Face threshold, lower is stricter", 75.0)
     unknown_face_match_threshold = prompt_float("Unknown face match threshold", 42.0)
-    arcface_similarity_threshold = prompt_float("ArcFace similarity threshold", 0.45)
+    arcface_similarity_threshold = prompt_float("ArcFace similarity threshold", 0.34)
     arcface_similarity_margin = prompt_float("ArcFace best-match margin", 0.03)
     identity_alert_hold_seconds = prompt_float("Remember flagged identity seconds", 300.0)
     roi_text = prompt_text("Restricted zone ROI x,y,width,height, or blank", "")
