@@ -197,7 +197,8 @@ class FaceRecognizer:
 
             detected_faces = self._detect_faces(image)
             if len(detected_faces) == 0:
-                print(f"No face found in {image_path}; skipping.")
+                print(f"No face found in {image_path}; using full image.")
+                faces.append(self._prepare_face(image))
                 continue
 
             x, y, width, height = max(detected_faces, key=lambda box: box[2] * box[3])
