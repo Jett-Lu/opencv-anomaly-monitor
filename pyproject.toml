@@ -12,6 +12,8 @@ dependencies = [
   "opencv-contrib-python>=4.9.0",
   "numpy>=1.26.0",
   "mediapipe>=0.10.35",
+  "onnxruntime>=1.18.0",
+  "huggingface_hub>=0.23.0",
 ]
 
 [project.scripts]

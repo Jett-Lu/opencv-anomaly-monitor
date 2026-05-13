@@ -89,6 +89,10 @@ class MotionAnomalyDetector:
                 known_faces_dir=config.known_faces_dir,
                 confidence_threshold=config.face_confidence_threshold,
                 unknown_match_threshold=config.unknown_face_match_threshold,
+                engine=config.face_engine,
+                arcface_model_path=config.arcface_model_path,
+                arcface_similarity_threshold=config.arcface_similarity_threshold,
+                arcface_similarity_margin=config.arcface_similarity_margin,
             )
             if config.enable_face_recognition
             else None

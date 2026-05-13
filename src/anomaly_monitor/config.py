@@ -6,6 +6,7 @@ Roi = tuple[int, int, int, int]
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "data" / "alerts"
 DEFAULT_POSE_MODEL_PATH = PROJECT_ROOT / "data" / "models" / "pose_landmarker_lite.task"
+DEFAULT_ARCFACE_MODEL_PATH = PROJECT_ROOT / "data" / "models" / "arcface.onnx"
 DEFAULT_KNOWN_FACES_DIR = PROJECT_ROOT / "data" / "known_faces"
 
 
@@ -45,8 +46,12 @@ class MonitorConfig:
     max_poses: int = 4
     pose_model_path: Path = DEFAULT_POSE_MODEL_PATH
     known_faces_dir: Path = DEFAULT_KNOWN_FACES_DIR
+    face_engine: str = "arcface"
     face_confidence_threshold: float = 75.0
     unknown_face_match_threshold: float = 42.0
+    arcface_model_path: Path = DEFAULT_ARCFACE_MODEL_PATH
+    arcface_similarity_threshold: float = 0.45
+    arcface_similarity_margin: float = 0.03
     identity_alert_hold_seconds: float = 300.0
     cooldown_seconds: float = 5.0
     alert_hold_seconds: float = 5.0
@@ -88,8 +93,14 @@ class MonitorConfig:
             raise ValueError("max_poses must be at least 1")
         if self.face_confidence_threshold <= 0:
             raise ValueError("face_confidence_threshold must be greater than zero")
+        if self.face_engine not in {"arcface", "lbph"}:
+            raise ValueError("face_engine must be arcface or lbph")
         if self.unknown_face_match_threshold <= 0:
             raise ValueError("unknown_face_match_threshold must be greater than zero")
+        if not 0 < self.arcface_similarity_threshold <= 1:
+            raise ValueError("arcface_similarity_threshold must be between 0 and 1")
+        if self.arcface_similarity_margin < 0:
+            raise ValueError("arcface_similarity_margin must be zero or greater")
         if self.identity_alert_hold_seconds < 0:
             raise ValueError("identity_alert_hold_seconds must be zero or greater")
         if self.cooldown_seconds < 0:

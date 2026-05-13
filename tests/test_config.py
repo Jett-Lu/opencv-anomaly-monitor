@@ -56,6 +56,22 @@ class MonitorConfigValidationTest(unittest.TestCase):
                 post_alert_seconds=0,
             ).validate()
 
+    def test_validate_rejects_invalid_face_engine(self) -> None:
+        with self.assertRaisesRegex(ValueError, "face_engine"):
+            MonitorConfig(
+                source="0",
+                output_dir=Path("data/alerts"),
+                face_engine="other",
+            ).validate()
+
+    def test_validate_rejects_invalid_arcface_threshold(self) -> None:
+        with self.assertRaisesRegex(ValueError, "arcface_similarity_threshold"):
+            MonitorConfig(
+                source="0",
+                output_dir=Path("data/alerts"),
+                arcface_similarity_threshold=0,
+            ).validate()
+
 
 if __name__ == "__main__":
     unittest.main()
