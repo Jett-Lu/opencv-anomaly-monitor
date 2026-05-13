@@ -6,15 +6,13 @@ from pathlib import Path
 
 from anomaly_monitor.config import (
     DEFAULT_KNOWN_FACES_DIR,
+    DEFAULT_OUTPUT_DIR,
     DEFAULT_POSE_MODEL_PATH,
     MonitorConfig,
 )
 from anomaly_monitor.enroll import run_enrollment
 from anomaly_monitor.main import parse_roi, run_monitor
 from anomaly_monitor.names import normalize_person_name
-
-
-DEFAULT_OUTPUT_DIR = Path("data/alerts")
 
 
 def prompt_text(label: str, default: str | None = None) -> str:
@@ -66,11 +64,13 @@ def demo_config(source: str = "0") -> MonitorConfig:
         output_dir=DEFAULT_OUTPUT_DIR,
         known_faces_dir=DEFAULT_KNOWN_FACES_DIR,
         pose_model_path=DEFAULT_POSE_MODEL_PATH,
-        pose_threshold=0.5,
-        wrist_speed_threshold=1.0,
+        pose_threshold=0.9,
+        wrist_speed_threshold=3.0,
         max_poses=4,
         alert_hold_seconds=8.0,
-        event_video_seconds=6.0,
+        event_video_seconds=5.0,
+        pre_alert_seconds=2.0,
+        post_alert_seconds=3.0,
     )
 
 
@@ -82,22 +82,26 @@ def begin_monitoring_default() -> None:
 
 def begin_monitoring_custom() -> None:
     source = prompt_text("Camera/video source", "0")
-    pose_threshold = prompt_float("Pose alert threshold", 0.5)
-    wrist_speed_threshold = prompt_float("Wrist speed threshold", 1.0)
-    loitering_seconds = prompt_float("Loitering seconds", 12.0)
-    roi_dwell_seconds = prompt_float("Restricted-zone dwell seconds", 3.0)
+    t_pose_only = prompt_yes_no("Only alert on T-pose test behavior", True)
+    pose_threshold = prompt_float("Pose alert threshold", 0.9)
+    wrist_speed_threshold = prompt_float("Wrist speed threshold", 3.0)
+    loitering_seconds = prompt_float("Loitering seconds", 30.0)
+    roi_dwell_seconds = prompt_float("Restricted-zone dwell seconds", 8.0)
     motion_history_seconds = prompt_float("Motion history seconds", 20.0)
-    rapid_body_speed_threshold = prompt_float("Rapid body speed threshold", 0.65)
+    rapid_body_speed_threshold = prompt_float("Rapid body speed threshold", 1.5)
     max_poses = prompt_int("Maximum people/skeletons", 4)
     alert_hold_seconds = prompt_float("Keep alert label visible for seconds", 8.0)
-    event_video_seconds = prompt_float("Event clip seconds", 6.0)
+    pre_alert_seconds = prompt_float("Seconds before alert in event clip", 2.0)
+    post_alert_seconds = prompt_float("Seconds after alert in event clip", 3.0)
     event_video_fps = prompt_float("Event clip FPS", 12.0)
     face_confidence_threshold = prompt_float("Face threshold, lower is stricter", 75.0)
+    unknown_face_match_threshold = prompt_float("Unknown face match threshold", 42.0)
+    identity_alert_hold_seconds = prompt_float("Remember flagged identity seconds", 300.0)
     roi_text = prompt_text("Restricted zone ROI x,y,width,height, or blank", "")
     roi = parse_roi(roi_text) if roi_text else None
     show_motion_boxes = prompt_yes_no("Show motion boxes", False)
     motion_alerts = prompt_yes_no("Enable motion-only alerts", False)
-    tracking = prompt_yes_no("Enable person tracking and motion history", True)
+    tracking = prompt_yes_no("Enable person tracking and motion history", False)
     face_recognition = prompt_yes_no("Enable face recognition", True)
 
     config = MonitorConfig(
@@ -105,8 +109,11 @@ def begin_monitoring_custom() -> None:
         output_dir=DEFAULT_OUTPUT_DIR,
         known_faces_dir=DEFAULT_KNOWN_FACES_DIR,
         face_confidence_threshold=face_confidence_threshold,
+        unknown_face_match_threshold=unknown_face_match_threshold,
+        identity_alert_hold_seconds=identity_alert_hold_seconds,
         pose_threshold=pose_threshold,
         wrist_speed_threshold=wrist_speed_threshold,
+        t_pose_only=t_pose_only,
         loitering_seconds=loitering_seconds,
         roi_dwell_seconds=roi_dwell_seconds,
         motion_history_seconds=motion_history_seconds,
@@ -114,7 +121,9 @@ def begin_monitoring_custom() -> None:
         max_poses=max_poses,
         pose_model_path=DEFAULT_POSE_MODEL_PATH,
         alert_hold_seconds=alert_hold_seconds,
-        event_video_seconds=event_video_seconds,
+        event_video_seconds=pre_alert_seconds + post_alert_seconds,
+        pre_alert_seconds=pre_alert_seconds,
+        post_alert_seconds=post_alert_seconds,
         event_video_fps=event_video_fps,
         roi=roi,
         show_motion_boxes=show_motion_boxes,

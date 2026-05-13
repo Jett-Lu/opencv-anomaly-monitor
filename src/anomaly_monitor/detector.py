@@ -51,6 +51,7 @@ class MotionAnomalyDetector:
     def __init__(self, config: MonitorConfig) -> None:
         self.config = config
         self.person_alerts: dict[int, ActivePersonAlert] = {}
+        self.identity_alerts: dict[str, ActivePersonAlert] = {}
         self.background_model = cv2.createBackgroundSubtractorMOG2(
             history=config.history,
             varThreshold=config.var_threshold,
@@ -60,6 +61,7 @@ class MotionAnomalyDetector:
             PoseBehaviorAnalyzer(
                 pose_threshold=config.pose_threshold,
                 wrist_speed_threshold=config.wrist_speed_threshold,
+                t_pose_only=config.t_pose_only,
                 roi=config.roi,
                 model_path=config.pose_model_path,
                 max_poses=config.max_poses,
@@ -86,6 +88,7 @@ class MotionAnomalyDetector:
             FaceRecognizer(
                 known_faces_dir=config.known_faces_dir,
                 confidence_threshold=config.face_confidence_threshold,
+                unknown_match_threshold=config.unknown_face_match_threshold,
             )
             if config.enable_face_recognition
             else None
@@ -131,15 +134,16 @@ class MotionAnomalyDetector:
             default=0.0,
         )
         tracking_labels = self._tracking_labels(tracking_behaviors)
-        active_labels = self._update_person_alerts(pose_people, tracking_behaviors)
+        active_labels = self._update_person_alerts(
+            pose_people,
+            tracking_behaviors,
+            matched_names,
+        )
         display_labels = self._merge_labels(labels + tracking_labels, active_labels)
-        active_pose_score = max(
-            (
-                alert.score
-                for alert in self.person_alerts.values()
-                if alert.expires_at > time.monotonic()
-            ),
-            default=0.0,
+        active_pose_score = self._active_alert_score(
+            pose_people,
+            tracking_behaviors,
+            matched_names,
         )
         score = max(alert_motion_score, pose_score, tracking_score, active_pose_score)
         person_summaries = self._person_summaries(
@@ -189,6 +193,7 @@ class MotionAnomalyDetector:
                 or pose_score >= self.config.pose_threshold
                 or tracking_score >= self.config.pose_threshold
                 or active_pose_score >= self.config.pose_threshold
+                or bool(active_labels)
             ),
         )
 
@@ -375,6 +380,7 @@ class MotionAnomalyDetector:
         self,
         people: list[PosePersonBehavior],
         tracking_behaviors: dict[int, TrackBehavior],
+        matched_names: dict[int, str],
     ) -> dict[int, list[str]]:
         now = time.monotonic()
         self.person_alerts = {
@@ -382,9 +388,15 @@ class MotionAnomalyDetector:
             for index, alert in self.person_alerts.items()
             if alert.expires_at > now
         }
+        self.identity_alerts = {
+            name: alert
+            for name, alert in self.identity_alerts.items()
+            if alert.expires_at > now
+        }
 
         for person in people:
             tracking = tracking_behaviors.get(person.index)
+            name = matched_names.get(person.index)
             labels = self._dedupe(
                 person.labels + (tracking.labels if tracking is not None else [])
             )
@@ -395,15 +407,59 @@ class MotionAnomalyDetector:
                     score=score,
                     expires_at=now + self.config.alert_hold_seconds,
                 )
+                if name is not None and self._can_remember_identity(name):
+                    self.identity_alerts[name] = ActivePersonAlert(
+                        labels=labels,
+                        score=score,
+                        expires_at=now + self.config.identity_alert_hold_seconds,
+                    )
 
         active_labels: dict[int, list[str]] = {}
         for person in people:
             tracking = tracking_behaviors.get(person.index)
+            alerts = []
             alert = self.person_alerts.get(self._alert_key(person, tracking))
             if alert is not None and alert.expires_at > now:
-                active_labels[person.index] = alert.labels
+                alerts.append(alert)
+
+            name = matched_names.get(person.index)
+            identity_alert = self.identity_alerts.get(name) if name is not None else None
+            if identity_alert is not None and identity_alert.expires_at > now:
+                alerts.append(identity_alert)
+
+            if alerts:
+                labels: list[str] = []
+                for item in alerts:
+                    labels.extend(item.labels)
+                active_labels[person.index] = self._dedupe(labels)
 
         return active_labels
+
+    def _can_remember_identity(self, name: str) -> bool:
+        if not name or name == "no face":
+            return False
+        return not (name.startswith("Person ") and name.removeprefix("Person ").isdigit())
+
+    def _active_alert_score(
+        self,
+        people: list[PosePersonBehavior],
+        tracking_behaviors: dict[int, TrackBehavior],
+        matched_names: dict[int, str],
+    ) -> float:
+        now = time.monotonic()
+        scores: list[float] = []
+        for person in people:
+            tracking = tracking_behaviors.get(person.index)
+            alert = self.person_alerts.get(self._alert_key(person, tracking))
+            if alert is not None and alert.expires_at > now:
+                scores.append(alert.score)
+
+            name = matched_names.get(person.index)
+            identity_alert = self.identity_alerts.get(name) if name is not None else None
+            if identity_alert is not None and identity_alert.expires_at > now:
+                scores.append(identity_alert.score)
+
+        return max(scores, default=0.0)
 
     def _alert_key(
         self,
@@ -562,6 +618,7 @@ class MotionAnomalyDetector:
             track_name = f"T{tracking.track_id} {name}" if tracking is not None else name
             if labels_for_person:
                 label = f"ALERT {track_name}: {', '.join(labels_for_person[:2])}"
+                self._draw_alert_box(frame, person)
             else:
                 label = track_name
 
@@ -576,3 +633,17 @@ class MotionAnomalyDetector:
                 2,
                 cv2.LINE_AA,
             )
+
+    def _draw_alert_box(
+        self,
+        frame: np.ndarray,
+        person: PosePersonBehavior,
+    ) -> None:
+        x, y, width, height = person.box
+        cv2.rectangle(
+            frame,
+            (x, y),
+            (x + width, y + height),
+            (0, 0, 255),
+            3,
+        )

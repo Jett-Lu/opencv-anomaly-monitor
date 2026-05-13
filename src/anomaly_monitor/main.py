@@ -3,13 +3,38 @@ from __future__ import annotations
 import argparse
 import time
 from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
 
-from anomaly_monitor.config import MonitorConfig
+from anomaly_monitor.config import (
+    DEFAULT_KNOWN_FACES_DIR,
+    DEFAULT_OUTPUT_DIR,
+    DEFAULT_POSE_MODEL_PATH,
+    MonitorConfig,
+)
 from anomaly_monitor.detector import MotionAnomalyDetector
 from anomaly_monitor.events import AlertEvent, EventLogger
+
+
+@dataclass
+class PendingAlertClip:
+    frame_number: int
+    score: float
+    motion_score: float
+    pose_score: float
+    tracking_score: float
+    moving_area: int
+    region_count: int
+    labels: list[str]
+    person_detected: bool
+    identity: str
+    identities: list[str]
+    people: list[str]
+    snapshot_path: Path
+    frames: list
+    post_frames_remaining: int
 
 
 def parse_roi(value: str) -> tuple[int, int, int, int]:
@@ -39,13 +64,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-dir",
-        default="data/alerts",
+        type=Path,
+        default=DEFAULT_OUTPUT_DIR,
         help="Folder where alert snapshots and events.jsonl are saved.",
     )
     parser.add_argument(
         "--known-faces-dir",
         type=Path,
-        default=Path("data/known_faces"),
+        default=DEFAULT_KNOWN_FACES_DIR,
         help="Folder of known faces, organized as known_faces/person_name/images.",
     )
     parser.add_argument(
@@ -53,6 +79,18 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=75.0,
         help="LBPH face recognition threshold. Lower is stricter.",
+    )
+    parser.add_argument(
+        "--unknown-face-match-threshold",
+        type=float,
+        default=42.0,
+        help="Session unknown-face match threshold. Lower is stricter.",
+    )
+    parser.add_argument(
+        "--identity-alert-hold-seconds",
+        type=float,
+        default=300.0,
+        help="Seconds to remember that a flagged identity should stay flagged.",
     )
     parser.add_argument(
         "--threshold",
@@ -63,25 +101,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--pose-threshold",
         type=float,
-        default=0.75,
+        default=0.9,
         help="Pose behavior score threshold from 0 to 1.",
     )
     parser.add_argument(
         "--wrist-speed-threshold",
         type=float,
-        default=1.4,
+        default=3.0,
         help="Normalized wrist speed needed to flag rapid hand movement.",
     )
     parser.add_argument(
         "--loitering-seconds",
         type=float,
-        default=12.0,
+        default=30.0,
         help="Seconds a tracked person can stay in place before loitering is flagged.",
     )
     parser.add_argument(
         "--roi-dwell-seconds",
         type=float,
-        default=3.0,
+        default=8.0,
         help="Seconds a tracked person can remain inside the ROI before dwell is flagged.",
     )
     parser.add_argument(
@@ -93,13 +131,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--rapid-body-speed-threshold",
         type=float,
-        default=0.65,
+        default=1.5,
         help="Normalized full-body speed needed to flag rapid body movement.",
     )
     parser.add_argument(
         "--repeated-motion-distance",
         type=float,
-        default=0.35,
+        default=0.6,
         help="Recent normalized path length needed to flag repeated motion.",
     )
     parser.add_argument(
@@ -111,7 +149,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--pose-model",
         type=Path,
-        default=Path("data/models/pose_landmarker_lite.task"),
+        default=DEFAULT_POSE_MODEL_PATH,
         help="Path to the MediaPipe pose landmarker model file.",
     )
     parser.add_argument(
@@ -129,8 +167,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--event-video-seconds",
         type=float,
-        default=4.0,
-        help="Seconds of recent annotated frames to save as an alert clip.",
+        default=None,
+        help="Deprecated alias for --post-alert-seconds.",
+    )
+    parser.add_argument(
+        "--pre-alert-seconds",
+        type=float,
+        default=2.0,
+        help="Seconds before an alert to include in saved MP4 clips.",
+    )
+    parser.add_argument(
+        "--post-alert-seconds",
+        type=float,
+        default=3.0,
+        help="Seconds after an alert to include in saved MP4 clips.",
     )
     parser.add_argument(
         "--event-video-fps",
@@ -172,9 +222,19 @@ def parse_args() -> argparse.Namespace:
         help="Allow motion-only alerts. By default alerts focus on person pose behavior.",
     )
     parser.add_argument(
+        "--full-behavior",
+        action="store_true",
+        help="Enable the rapid-hand, ROI, and extended-arm behavior rules.",
+    )
+    parser.add_argument(
         "--no-pose",
         action="store_true",
         help="Disable human skeleton and behavior analysis.",
+    )
+    parser.add_argument(
+        "--tracking",
+        action="store_true",
+        help="Enable person tracking and motion history analysis.",
     )
     parser.add_argument(
         "--no-tracking",
@@ -196,8 +256,10 @@ def normalize_source(source: str) -> int | str:
 
 
 def save_alert_snapshot(output_dir: Path, frame_number: int, frame) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
     snapshot_path = output_dir / f"alert_frame_{frame_number:06d}.jpg"
-    cv2.imwrite(str(snapshot_path), frame)
+    if not cv2.imwrite(str(snapshot_path), frame):
+        raise RuntimeError(f"Could not save alert snapshot: {snapshot_path}")
     return snapshot_path
 
 
@@ -207,6 +269,7 @@ def save_event_video(
     frames,
     fps: float,
 ) -> Path | None:
+    output_dir.mkdir(parents=True, exist_ok=True)
     buffered_frames = list(frames)
     if not buffered_frames:
         return None
@@ -228,7 +291,46 @@ def save_event_video(
         writer.write(frame)
 
     writer.release()
+    if not video_path.exists() or video_path.stat().st_size == 0:
+        return None
+
     return video_path
+
+
+def finalize_pending_clip(
+    output_dir: Path,
+    logger: EventLogger,
+    pending: PendingAlertClip,
+    fps: float,
+) -> None:
+    video_path = save_event_video(
+        output_dir,
+        pending.frame_number,
+        pending.frames,
+        fps,
+    )
+    event = AlertEvent.create(
+        frame_number=pending.frame_number,
+        score=pending.score,
+        motion_score=pending.motion_score,
+        pose_score=pending.pose_score,
+        tracking_score=pending.tracking_score,
+        moving_area=pending.moving_area,
+        region_count=pending.region_count,
+        labels=pending.labels,
+        person_detected=pending.person_detected,
+        identity=pending.identity,
+        identities=pending.identities,
+        people=pending.people,
+        snapshot_path=pending.snapshot_path,
+        video_path=video_path,
+    )
+    logger.write(event)
+    print(
+        f"Alert saved | frame={event.frame_number} "
+        f"person={event.identity} score={event.score} labels={event.labels} "
+        f"snapshot={event.snapshot_path} video={event.video_path}"
+    )
 
 
 def run_monitor(config: MonitorConfig) -> None:
@@ -245,8 +347,10 @@ def run_monitor(config: MonitorConfig) -> None:
         logger = EventLogger(config.output_dir)
         last_alert_time = 0.0
         frame_number = 0
-        video_buffer_size = max(1, int(config.event_video_seconds * config.event_video_fps))
+        video_buffer_size = max(1, int(config.pre_alert_seconds * config.event_video_fps))
+        post_frame_count = max(0, int(config.post_alert_seconds * config.event_video_fps))
         recent_frames = deque(maxlen=video_buffer_size)
+        pending_clips: list[PendingAlertClip] = []
 
         print("Camera anomaly monitor is running.")
         print("Press q to quit.")
@@ -261,21 +365,28 @@ def run_monitor(config: MonitorConfig) -> None:
             recent_frames.append(result.frame.copy())
             now = time.monotonic()
 
+            for pending in pending_clips[:]:
+                pending.frames.append(result.frame.copy())
+                pending.post_frames_remaining -= 1
+                if pending.post_frames_remaining <= 0:
+                    finalize_pending_clip(
+                        config.output_dir,
+                        logger,
+                        pending,
+                        config.event_video_fps,
+                    )
+                    pending_clips.remove(pending)
+
             warmed_up = frame_number > config.warmup_frames
             if (
                 warmed_up
                 and result.is_anomaly
                 and now - last_alert_time >= config.cooldown_seconds
+                and not pending_clips
             ):
                 snapshot_path = save_alert_snapshot(config.output_dir, frame_number, result.frame)
-                video_path = save_event_video(
-                    config.output_dir,
+                pending = PendingAlertClip(
                     frame_number,
-                    recent_frames,
-                    config.event_video_fps,
-                )
-                event = AlertEvent.create(
-                    frame_number=frame_number,
                     score=result.score,
                     motion_score=result.motion_score,
                     pose_score=result.pose_score,
@@ -288,15 +399,23 @@ def run_monitor(config: MonitorConfig) -> None:
                     identities=[identity.name for identity in result.identities],
                     people=result.people,
                     snapshot_path=snapshot_path,
-                    video_path=video_path,
+                    frames=list(recent_frames),
+                    post_frames_remaining=post_frame_count,
                 )
-                logger.write(event)
                 last_alert_time = now
-                print(
-                    f"Alert saved | frame={event.frame_number} "
-                    f"person={event.identity} score={event.score} labels={event.labels} "
-                    f"snapshot={event.snapshot_path} video={event.video_path}"
-                )
+                if pending.post_frames_remaining <= 0:
+                    finalize_pending_clip(
+                        config.output_dir,
+                        logger,
+                        pending,
+                        config.event_video_fps,
+                    )
+                else:
+                    pending_clips.append(pending)
+                    print(
+                        f"Alert triggered | frame={frame_number} "
+                        f"capturing {config.post_alert_seconds:.1f}s post-roll..."
+                    )
 
             cv2.imshow("Camera Anomaly Monitor", result.frame)
             if config.show_mask:
@@ -304,6 +423,14 @@ def run_monitor(config: MonitorConfig) -> None:
 
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
+
+        for pending in pending_clips:
+            finalize_pending_clip(
+                config.output_dir,
+                logger,
+                pending,
+                config.event_video_fps,
+            )
     finally:
         capture.release()
         if detector is not None:
@@ -313,11 +440,18 @@ def run_monitor(config: MonitorConfig) -> None:
 
 def main() -> None:
     args = parse_args()
+    post_alert_seconds = (
+        args.event_video_seconds
+        if args.event_video_seconds is not None
+        else args.post_alert_seconds
+    )
     config = MonitorConfig(
         source=args.source,
-        output_dir=Path(args.output_dir),
+        output_dir=args.output_dir,
         known_faces_dir=args.known_faces_dir,
         face_confidence_threshold=args.face_confidence_threshold,
+        unknown_face_match_threshold=args.unknown_face_match_threshold,
+        identity_alert_hold_seconds=args.identity_alert_hold_seconds,
         threshold=args.threshold,
         pose_threshold=args.pose_threshold,
         wrist_speed_threshold=args.wrist_speed_threshold,
@@ -330,13 +464,16 @@ def main() -> None:
         pose_model_path=args.pose_model,
         cooldown_seconds=args.cooldown,
         alert_hold_seconds=args.alert_hold_seconds,
-        event_video_seconds=args.event_video_seconds,
+        event_video_seconds=args.pre_alert_seconds + post_alert_seconds,
+        pre_alert_seconds=args.pre_alert_seconds,
+        post_alert_seconds=post_alert_seconds,
         event_video_fps=args.event_video_fps,
         warmup_frames=args.warmup_frames,
         min_area=args.min_area,
         roi=args.roi,
+        t_pose_only=not args.full_behavior,
         enable_pose=not args.no_pose,
-        enable_tracking=not args.no_tracking,
+        enable_tracking=args.tracking and not args.no_tracking,
         enable_face_recognition=not args.no_face_recognition,
         enable_motion_alerts=args.motion_alerts,
         show_motion_boxes=args.show_motion_boxes,

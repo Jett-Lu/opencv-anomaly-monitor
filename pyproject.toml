@@ -17,6 +17,7 @@ dependencies = [
 [project.scripts]
 anomaly-monitor = "anomaly_monitor.main:main"
 anomaly-menu = "anomaly_monitor.menu:main"
+add-face = "anomaly_monitor.enroll:main"
 enroll-face = "anomaly_monitor.enroll:main"
 
 [tool.setuptools.packages.find]

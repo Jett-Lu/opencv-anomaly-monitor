@@ -47,6 +47,15 @@ class MonitorConfigValidationTest(unittest.TestCase):
                 loitering_seconds=0,
             ).validate()
 
+    def test_validate_rejects_empty_alert_clip_window(self) -> None:
+        with self.assertRaisesRegex(ValueError, "alert clip seconds"):
+            MonitorConfig(
+                source="0",
+                output_dir=Path("data/alerts"),
+                pre_alert_seconds=0,
+                post_alert_seconds=0,
+            ).validate()
+
 
 if __name__ == "__main__":
     unittest.main()

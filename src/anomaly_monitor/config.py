@@ -3,8 +3,10 @@ from pathlib import Path
 
 
 Roi = tuple[int, int, int, int]
-DEFAULT_POSE_MODEL_PATH = Path("data/models/pose_landmarker_lite.task")
-DEFAULT_KNOWN_FACES_DIR = Path("data/known_faces")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "data" / "alerts"
+DEFAULT_POSE_MODEL_PATH = PROJECT_ROOT / "data" / "models" / "pose_landmarker_lite.task"
+DEFAULT_KNOWN_FACES_DIR = PROJECT_ROOT / "data" / "known_faces"
 
 
 def clip_roi_to_frame(roi: Roi, frame_shape: tuple[int, ...]) -> Roi | None:
@@ -38,15 +40,19 @@ class MonitorConfig:
     output_dir: Path
     roi: Roi | None = None
     threshold: float = 0.08
-    pose_threshold: float = 0.75
-    wrist_speed_threshold: float = 1.4
+    pose_threshold: float = 0.9
+    wrist_speed_threshold: float = 3.0
     max_poses: int = 4
     pose_model_path: Path = DEFAULT_POSE_MODEL_PATH
     known_faces_dir: Path = DEFAULT_KNOWN_FACES_DIR
     face_confidence_threshold: float = 75.0
+    unknown_face_match_threshold: float = 42.0
+    identity_alert_hold_seconds: float = 300.0
     cooldown_seconds: float = 5.0
     alert_hold_seconds: float = 5.0
-    event_video_seconds: float = 4.0
+    event_video_seconds: float = 5.0
+    pre_alert_seconds: float = 2.0
+    post_alert_seconds: float = 3.0
     event_video_fps: float = 12.0
     warmup_frames: int = 30
     min_area: int = 750
@@ -54,16 +60,17 @@ class MonitorConfig:
     history: int = 500
     var_threshold: float = 32.0
     learning_rate: float = -1.0
-    enable_tracking: bool = True
+    t_pose_only: bool = True
+    enable_tracking: bool = False
     track_match_distance: float = 0.16
     track_lost_seconds: float = 2.0
     motion_history_seconds: float = 20.0
-    loitering_seconds: float = 12.0
+    loitering_seconds: float = 30.0
     loitering_radius: float = 0.08
-    roi_dwell_seconds: float = 3.0
-    repeated_motion_distance: float = 0.35
+    roi_dwell_seconds: float = 8.0
+    repeated_motion_distance: float = 0.6
     repeated_motion_radius: float = 0.12
-    rapid_body_speed_threshold: float = 0.65
+    rapid_body_speed_threshold: float = 1.5
     enable_pose: bool = True
     enable_face_recognition: bool = True
     enable_motion_alerts: bool = False
@@ -81,12 +88,22 @@ class MonitorConfig:
             raise ValueError("max_poses must be at least 1")
         if self.face_confidence_threshold <= 0:
             raise ValueError("face_confidence_threshold must be greater than zero")
+        if self.unknown_face_match_threshold <= 0:
+            raise ValueError("unknown_face_match_threshold must be greater than zero")
+        if self.identity_alert_hold_seconds < 0:
+            raise ValueError("identity_alert_hold_seconds must be zero or greater")
         if self.cooldown_seconds < 0:
             raise ValueError("cooldown_seconds must be zero or greater")
         if self.alert_hold_seconds < 0:
             raise ValueError("alert_hold_seconds must be zero or greater")
         if self.event_video_seconds <= 0:
             raise ValueError("event_video_seconds must be greater than zero")
+        if self.pre_alert_seconds < 0:
+            raise ValueError("pre_alert_seconds must be zero or greater")
+        if self.post_alert_seconds < 0:
+            raise ValueError("post_alert_seconds must be zero or greater")
+        if self.pre_alert_seconds + self.post_alert_seconds <= 0:
+            raise ValueError("alert clip seconds must be greater than zero")
         if self.event_video_fps <= 0:
             raise ValueError("event_video_fps must be greater than zero")
         if self.warmup_frames < 0:

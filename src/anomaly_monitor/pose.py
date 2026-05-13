@@ -2,10 +2,17 @@ from __future__ import annotations
 
 import time
 import urllib.request
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
+
+if "MPLCONFIGDIR" not in os.environ:
+    matplotlib_cache = Path.cwd() / ".tmp" / "matplotlib"
+    matplotlib_cache.mkdir(parents=True, exist_ok=True)
+    os.environ["MPLCONFIGDIR"] = str(matplotlib_cache)
+
 import mediapipe as mp
 import numpy as np
 
@@ -25,6 +32,7 @@ class PosePersonBehavior:
     labels: list[str]
     anchor: tuple[int, int]
     center: tuple[float, float]
+    box: tuple[int, int, int, int]
 
 
 @dataclass(frozen=True)
@@ -47,12 +55,14 @@ class PoseBehaviorAnalyzer:
         self,
         pose_threshold: float,
         wrist_speed_threshold: float,
+        t_pose_only: bool,
         roi: Roi | None,
         model_path: Path,
         max_poses: int,
     ) -> None:
         self.pose_threshold = pose_threshold
         self.wrist_speed_threshold = wrist_speed_threshold
+        self.t_pose_only = t_pose_only
         self.roi = roi
         self.model_path = self._ensure_model(model_path)
         self.previous_landmarks: list[dict[int, tuple[float, float]]] = []
@@ -102,6 +112,7 @@ class PoseBehaviorAnalyzer:
             score, labels = self._score_behavior(landmarks, frame_shape, previous, now)
             anchor = self._anchor(landmarks, frame_shape, person_index)
             center = self._center(landmarks)
+            box = self._bounding_box(landmarks, frame_shape)
 
             people.append(
                 PosePersonBehavior(
@@ -110,6 +121,7 @@ class PoseBehaviorAnalyzer:
                     labels=labels,
                     anchor=anchor,
                     center=center,
+                    box=box,
                 )
             )
             current_landmarks.append(landmarks)
@@ -198,6 +210,12 @@ class PoseBehaviorAnalyzer:
         labels: list[str] = []
         score = 0.0
 
+        if self._is_t_pose(landmarks):
+            return 1.0, ["t_pose"]
+
+        if self.t_pose_only:
+            return 0.0, []
+
         max_wrist_speed = self._max_wrist_speed(landmarks, previous_landmarks, now)
         if max_wrist_speed >= self.wrist_speed_threshold:
             labels.append("rapid_hand_motion")
@@ -218,6 +236,49 @@ class PoseBehaviorAnalyzer:
             score += 0.25
 
         return min(score, 1.0), labels
+
+    def _is_t_pose(self, landmarks: dict[int, tuple[float, float]]) -> bool:
+        indexes = {
+            "left_shoulder": mp.tasks.vision.PoseLandmark.LEFT_SHOULDER.value,
+            "right_shoulder": mp.tasks.vision.PoseLandmark.RIGHT_SHOULDER.value,
+            "left_elbow": mp.tasks.vision.PoseLandmark.LEFT_ELBOW.value,
+            "right_elbow": mp.tasks.vision.PoseLandmark.RIGHT_ELBOW.value,
+            "left_wrist": mp.tasks.vision.PoseLandmark.LEFT_WRIST.value,
+            "right_wrist": mp.tasks.vision.PoseLandmark.RIGHT_WRIST.value,
+        }
+        if any(index not in landmarks for index in indexes.values()):
+            return False
+
+        left_shoulder = landmarks[indexes["left_shoulder"]]
+        right_shoulder = landmarks[indexes["right_shoulder"]]
+        left_elbow = landmarks[indexes["left_elbow"]]
+        right_elbow = landmarks[indexes["right_elbow"]]
+        left_wrist = landmarks[indexes["left_wrist"]]
+        right_wrist = landmarks[indexes["right_wrist"]]
+
+        shoulder_width = abs(left_shoulder[0] - right_shoulder[0])
+        if shoulder_width < 0.04:
+            return False
+
+        shoulder_y = (left_shoulder[1] + right_shoulder[1]) / 2
+        wrists_level = (
+            abs(left_wrist[1] - shoulder_y) <= 0.12
+            and abs(right_wrist[1] - shoulder_y) <= 0.12
+        )
+        elbows_level = (
+            abs(left_elbow[1] - shoulder_y) <= 0.14
+            and abs(right_elbow[1] - shoulder_y) <= 0.14
+        )
+        wrist_span = abs(left_wrist[0] - right_wrist[0])
+        arms_wide = wrist_span >= shoulder_width * 2.4
+        hands_outside_shoulders = (
+            min(left_wrist[0], right_wrist[0])
+            <= min(left_shoulder[0], right_shoulder[0]) - shoulder_width * 0.45
+            and max(left_wrist[0], right_wrist[0])
+            >= max(left_shoulder[0], right_shoulder[0]) + shoulder_width * 0.45
+        )
+
+        return wrists_level and elbows_level and arms_wide and hands_outside_shoulders
 
     def _max_wrist_speed(
         self,
@@ -322,6 +383,25 @@ class PoseBehaviorAnalyzer:
         x = int(sum(point[0] for point in points) / len(points) * frame_width)
         y = int(sum(point[1] for point in points) / len(points) * frame_height)
         return x, max(24 + person_index * 24, y - 16)
+
+    def _bounding_box(
+        self,
+        landmarks: dict[int, tuple[float, float]],
+        frame_shape: tuple[int, ...],
+    ) -> tuple[int, int, int, int]:
+        frame_height, frame_width = frame_shape[:2]
+        if not landmarks:
+            return 0, 0, frame_width, frame_height
+
+        xs = [point[0] for point in landmarks.values()]
+        ys = [point[1] for point in landmarks.values()]
+        padding_x = int(frame_width * 0.04)
+        padding_y = int(frame_height * 0.06)
+        left = max(0, int(min(xs) * frame_width) - padding_x)
+        top = max(0, int(min(ys) * frame_height) - padding_y)
+        right = min(frame_width - 1, int(max(xs) * frame_width) + padding_x)
+        bottom = min(frame_height - 1, int(max(ys) * frame_height) + padding_y)
+        return left, top, max(1, right - left), max(1, bottom - top)
 
     def _center(self, landmarks: dict[int, tuple[float, float]]) -> tuple[float, float]:
         if not landmarks:
