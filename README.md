@@ -1,4 +1,4 @@
-# Camera-Based Anomaly Monitor
+# OpenCV Based Anomaly Monitor
 
 A lightweight computer vision and AI pose-estimation proof of concept for detecting unusual activity in camera or video feeds.
 
