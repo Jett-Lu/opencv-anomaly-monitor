@@ -2,7 +2,7 @@
 
 A lightweight computer vision and AI pose-estimation proof of concept for detecting unusual activity in camera or video feeds.
 
-This project uses OpenCV for motion detection, MediaPipe for pre-trained human skeleton detection, and optional Hugging Face ArcFace ONNX embeddings for local face recognition. It monitors motion patterns, scores anomalous activity, detects human pose behavior, displays live detections, and saves alert evidence for review. It is designed as a practical demo that can be shown quickly, extended later, and shared on GitHub as a clean computer vision project.
+This project uses OpenCV for motion detection and MediaPipe for pre-trained human skeleton detection. It monitors motion patterns, scores anomalous activity, detects human pose behavior, displays live detections, and saves alert evidence for review. It is designed as a practical demo that can be shown quickly, extended later, and shared on GitHub as a clean computer vision project.
 
 ## What It Does
 
@@ -10,7 +10,7 @@ This project uses OpenCV for motion detection, MediaPipe for pre-trained human s
 - Detects significant movement using OpenCV background subtraction
 - Detects human skeletons using MediaPipe pose estimation
 - Draws skeletons for multiple people at once
-- Recognizes known people from a local face image folder using ArcFace embeddings by default
+- Recognizes known people from a local face image folder
 - Gives session labels to unknown faces, for example `Unknown A`
 - Remembers flagged identities so a flagged unknown person stays flagged if they return
 - Defaults to a simple T-pose test alert so normal movement stays quiet
@@ -141,7 +141,7 @@ data/
       face1.jpg
 ```
 
-Use simple demo names like `Person A`, `Person B`, or real names only if you have permission to use those photos. The ArcFace recognizer builds local embeddings when the app starts; no custom training is required. Aim for 8-15 clear samples per person from the same camera with small natural angle and lighting changes.
+Use simple demo names like `Person A`, `Person B`, or real names only if you have permission to use those photos. The recognizer trains locally when the app starts.
 
 ## Run With Webcam
 
@@ -223,18 +223,6 @@ Run with known-face recognition:
 python -m anomaly_monitor.main --source 0 --known-faces-dir data/known_faces
 ```
 
-Use the older OpenCV LBPH recognizer instead of ArcFace:
-
-```bash
-python -m anomaly_monitor.main --source 0 --face-engine lbph
-```
-
-Make ArcFace stricter if names are being guessed too often:
-
-```bash
-python -m anomaly_monitor.main --source 0 --arcface-similarity-threshold 0.52 --arcface-similarity-margin 0.06
-```
-
 Detect up to six people:
 
 ```bash
@@ -257,12 +245,8 @@ Arguments:
 
 - `--source`: webcam index, video file path, or RTSP/HTTP camera URL
 - `--known-faces-dir`: folder containing known face images by person
-- `--face-engine`: `arcface` for pretrained embeddings or `lbph` for the older OpenCV recognizer
-- `--face-confidence-threshold`: LBPH face recognition threshold, where lower is stricter
+- `--face-confidence-threshold`: face recognition threshold, where lower is stricter
 - `--unknown-face-match-threshold`: session unknown-face threshold, where lower is stricter
-- `--arcface-model`: path where the ArcFace ONNX model is stored
-- `--arcface-similarity-threshold`: ArcFace match score needed to name a person, where higher is stricter
-- `--arcface-similarity-margin`: required gap between the best and second-best ArcFace match
 - `--identity-alert-hold-seconds`: seconds a flagged identity stays remembered
 - `--threshold`: anomaly score needed to trigger an alert
 - `--pose-threshold`: pose behavior score needed to trigger an alert
@@ -315,7 +299,7 @@ Third, it can track pose detections across frames with a lightweight centroid tr
 - repeated back-and-forth movement
 - fast full-body movement near a restricted zone
 
-Fourth, it uses OpenCV face detection plus ArcFace ONNX embeddings to label people from `data/known_faces`. ArcFace compares each detected face against the local enrolled face embeddings and only names someone when the best match is strong enough and separated from the second-best match. The older OpenCV LBPH recognizer is still available with `--face-engine lbph`. If a face is not recognized, the app assigns a session label such as `Unknown A`. When an identity triggers an alert, that identity is remembered for a while, so `Unknown A` is marked again if they leave and come back during the same run.
+Fourth, it uses OpenCV face detection and LBPH face recognition to label people from `data/known_faces`. If a face is not recognized, the app assigns a session label such as `Unknown A`. When an identity triggers an alert, that identity is remembered for a while, so `Unknown A` is marked again if they leave and come back during the same run.
 
 When a person triggers an anomaly, the app keeps that person marked as `ALERT`, draws a red box around them, saves a JPEG snapshot, records the configured post-alert frames, then saves an MP4 clip. By default each clip includes about 2 seconds before the alert and 3 seconds after it. Evidence paths are written to `data/alerts/events.jsonl`.
 
@@ -331,12 +315,6 @@ On first run, the project downloads the lightweight MediaPipe pose model to:
 
 ```text
 data/models/pose_landmarker_lite.task
-```
-
-On first ArcFace run, the project downloads the Hugging Face ONNX model to:
-
-```text
-data/models/arcface.onnx
 ```
 
 ## Roadmap

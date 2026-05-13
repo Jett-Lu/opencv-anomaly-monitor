@@ -5,7 +5,6 @@ import shutil
 from pathlib import Path
 
 from anomaly_monitor.config import (
-    DEFAULT_ARCFACE_MODEL_PATH,
     DEFAULT_KNOWN_FACES_DIR,
     DEFAULT_OUTPUT_DIR,
     DEFAULT_POSE_MODEL_PATH,
@@ -55,14 +54,6 @@ def prompt_yes_no(label: str, default: bool = False) -> bool:
         print("Please enter y or n.")
 
 
-def prompt_face_engine(default: str = "arcface") -> str:
-    while True:
-        value = prompt_text("Face engine, arcface or lbph", default).lower()
-        if value in {"arcface", "lbph"}:
-            return value
-        print("Please enter arcface or lbph.")
-
-
 def pause() -> None:
     input("\nPress Enter to continue...")
 
@@ -72,8 +63,6 @@ def demo_config(source: str = "0") -> MonitorConfig:
         source=source,
         output_dir=DEFAULT_OUTPUT_DIR,
         known_faces_dir=DEFAULT_KNOWN_FACES_DIR,
-        face_engine="arcface",
-        arcface_model_path=DEFAULT_ARCFACE_MODEL_PATH,
         pose_model_path=DEFAULT_POSE_MODEL_PATH,
         pose_threshold=0.9,
         wrist_speed_threshold=3.0,
@@ -105,11 +94,8 @@ def begin_monitoring_custom() -> None:
     pre_alert_seconds = prompt_float("Seconds before alert in event clip", 2.0)
     post_alert_seconds = prompt_float("Seconds after alert in event clip", 3.0)
     event_video_fps = prompt_float("Event clip FPS", 12.0)
-    face_engine = prompt_face_engine("arcface")
     face_confidence_threshold = prompt_float("Face threshold, lower is stricter", 75.0)
     unknown_face_match_threshold = prompt_float("Unknown face match threshold", 42.0)
-    arcface_similarity_threshold = prompt_float("ArcFace similarity threshold", 0.45)
-    arcface_similarity_margin = prompt_float("ArcFace best-match margin", 0.03)
     identity_alert_hold_seconds = prompt_float("Remember flagged identity seconds", 300.0)
     roi_text = prompt_text("Restricted zone ROI x,y,width,height, or blank", "")
     roi = parse_roi(roi_text) if roi_text else None
@@ -122,12 +108,8 @@ def begin_monitoring_custom() -> None:
         source=source,
         output_dir=DEFAULT_OUTPUT_DIR,
         known_faces_dir=DEFAULT_KNOWN_FACES_DIR,
-        face_engine=face_engine,
         face_confidence_threshold=face_confidence_threshold,
         unknown_face_match_threshold=unknown_face_match_threshold,
-        arcface_model_path=DEFAULT_ARCFACE_MODEL_PATH,
-        arcface_similarity_threshold=arcface_similarity_threshold,
-        arcface_similarity_margin=arcface_similarity_margin,
         identity_alert_hold_seconds=identity_alert_hold_seconds,
         pose_threshold=pose_threshold,
         wrist_speed_threshold=wrist_speed_threshold,
@@ -327,7 +309,6 @@ def show_paths() -> None:
     print(f"- Alert output: {DEFAULT_OUTPUT_DIR.resolve()}")
     print(f"- Events log: {(DEFAULT_OUTPUT_DIR / 'events.jsonl').resolve()}")
     print(f"- Pose model: {DEFAULT_POSE_MODEL_PATH.resolve()}")
-    print(f"- ArcFace model: {DEFAULT_ARCFACE_MODEL_PATH.resolve()}")
 
 
 def main() -> None:

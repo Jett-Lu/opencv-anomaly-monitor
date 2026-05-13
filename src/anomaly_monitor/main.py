@@ -9,7 +9,6 @@ from pathlib import Path
 import cv2
 
 from anomaly_monitor.config import (
-    DEFAULT_ARCFACE_MODEL_PATH,
     DEFAULT_KNOWN_FACES_DIR,
     DEFAULT_OUTPUT_DIR,
     DEFAULT_POSE_MODEL_PATH,
@@ -76,12 +75,6 @@ def parse_args() -> argparse.Namespace:
         help="Folder of known faces, organized as known_faces/person_name/images.",
     )
     parser.add_argument(
-        "--face-engine",
-        choices=("arcface", "lbph"),
-        default="arcface",
-        help="Face recognizer to use. ArcFace uses pretrained ONNX embeddings.",
-    )
-    parser.add_argument(
         "--face-confidence-threshold",
         type=float,
         default=75.0,
@@ -92,24 +85,6 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=42.0,
         help="Session unknown-face match threshold. Lower is stricter.",
-    )
-    parser.add_argument(
-        "--arcface-model",
-        type=Path,
-        default=DEFAULT_ARCFACE_MODEL_PATH,
-        help="Path where the ArcFace ONNX model is stored or downloaded.",
-    )
-    parser.add_argument(
-        "--arcface-similarity-threshold",
-        type=float,
-        default=0.45,
-        help="ArcFace cosine similarity needed to label a known person. Higher is stricter.",
-    )
-    parser.add_argument(
-        "--arcface-similarity-margin",
-        type=float,
-        default=0.03,
-        help="Minimum gap between best and second-best ArcFace matches.",
     )
     parser.add_argument(
         "--identity-alert-hold-seconds",
@@ -474,12 +449,8 @@ def main() -> None:
         source=args.source,
         output_dir=args.output_dir,
         known_faces_dir=args.known_faces_dir,
-        face_engine=args.face_engine,
         face_confidence_threshold=args.face_confidence_threshold,
         unknown_face_match_threshold=args.unknown_face_match_threshold,
-        arcface_model_path=args.arcface_model,
-        arcface_similarity_threshold=args.arcface_similarity_threshold,
-        arcface_similarity_margin=args.arcface_similarity_margin,
         identity_alert_hold_seconds=args.identity_alert_hold_seconds,
         threshold=args.threshold,
         pose_threshold=args.pose_threshold,
