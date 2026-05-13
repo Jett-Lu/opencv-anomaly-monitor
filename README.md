@@ -232,7 +232,7 @@ python -m anomaly_monitor.main --source 0 --face-engine lbph
 Make ArcFace stricter if names are being guessed too often:
 
 ```bash
-python -m anomaly_monitor.main --source 0 --arcface-similarity-threshold 0.42 --arcface-similarity-margin 0.06
+python -m anomaly_monitor.main --source 0 --arcface-similarity-threshold 0.52 --arcface-similarity-margin 0.06
 ```
 
 Detect up to six people:

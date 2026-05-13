@@ -152,13 +152,14 @@ class ArcFaceEmbeddingModel:
         return normalize_embedding(embedding)
 
     def _preprocess(self, face_bgr: np.ndarray) -> np.ndarray:
-        resized = cv2.resize(face_bgr, ARCFACE_FACE_SIZE)
-        model_input = resized.astype(np.float32)
+        rgb = cv2.cvtColor(face_bgr, cv2.COLOR_BGR2RGB)
+        resized = cv2.resize(rgb, ARCFACE_FACE_SIZE)
+        normalized = (resized.astype(np.float32) - 127.5) / 128.0
 
         if self.input_layout == "nchw":
-            model_input = np.transpose(model_input, (2, 0, 1))
+            normalized = np.transpose(normalized, (2, 0, 1))
 
-        return model_input[np.newaxis, ...].astype(np.float32)
+        return normalized[np.newaxis, ...].astype(np.float32)
 
     def _input_layout(self, shape: list | tuple) -> str:
         if len(shape) == 4 and shape[1] == 3:
@@ -176,7 +177,7 @@ class FaceRecognizer:
         unknown_match_threshold: float = 42.0,
         engine: str = "arcface",
         arcface_model_path: Path | None = None,
-        arcface_similarity_threshold: float = 0.34,
+        arcface_similarity_threshold: float = 0.45,
         arcface_similarity_margin: float = 0.03,
     ) -> None:
         self.known_faces_dir = known_faces_dir
